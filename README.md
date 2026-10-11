@@ -1,4 +1,4 @@
-# CourseWorks WhatsApp Bot
+# Exie: CourseWorks WhatsApp Bot
 
 Answers cohort questions in WhatsApp (assignments, due dates, readings, syllabi, exams, announcements) using live data from Columbia CourseWorks (Canvas) and Google Gemini (free tier).
 
@@ -19,12 +19,14 @@ WhatsApp group ──► src/index.js (Baileys)    ──► src/agent.js (Gemin
 
 ## Using it
 
-In a group: start a message with `!cw` (or `@cw`, `!bot`), or @-mention the linked account.
+For classmates: see [STUDENT_GUIDE.md](STUDENT_GUIDE.md).
 
-- `!cw what's due this week?`
-- `!cw when is the stats midterm?`
-- `!cw what's the reading for entrepreneurship class 6?`
-- `!cw summarize the syllabus grading for UI/UX`
+In a group: start a message with `!exie` (or `@exie`; the older `!cw` also works), or @-mention the linked account.
+
+- `!exie what's due this week?`
+- `!exie when is the stats midterm?`
+- `!exie what's the reading for entrepreneurship class 6?`
+- `!exie summarize the syllabus grading for UI/UX`
 
 Direct messages to the linked account are answered without a prefix (`ANSWER_DMS=false` to turn off).
 

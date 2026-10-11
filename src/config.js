@@ -38,7 +38,7 @@ export const config = {
   paidFirst: process.env.PAID_FIRST === "true",
 
   // Messages starting with one of these (case-insensitive) trigger the bot.
-  triggers: list(process.env.BOT_TRIGGERS || "!cw,@cw,!bot"),
+  triggers: list(process.env.BOT_TRIGGERS || "!exie,@exie,!cw"),
   // Optional allowlist of WhatsApp group names. Empty = any group.
   allowedGroups: list(process.env.ALLOWED_GROUPS),
   // Answer direct messages without a trigger prefix. Off by default: WhatsApp

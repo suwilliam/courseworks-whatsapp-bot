@@ -156,7 +156,7 @@ async function connect() {
     auth: state,
     version,
     logger,
-    browser: Browsers.ubuntu("CourseWorks Bot"),
+    browser: Browsers.ubuntu("Exie"),
     markOnlineOnConnect: false, // keep phone notifications working
     syncFullHistory: false,
   });
