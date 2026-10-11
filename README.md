@@ -1,77 +1,142 @@
 # Exie: CourseWorks WhatsApp Bot
 
-Answers cohort questions in WhatsApp (assignments, due dates, readings, syllabi, exams, announcements) using live data from Columbia CourseWorks (Canvas) and Google Gemini (free tier).
+Exie answers questions in the MBAxMS cohort WhatsApp group (assignments, due dates, readings, syllabi, exams, announcements) using live data from Columbia CourseWorks (Canvas) and Google Gemini. For how classmates use it, see [STUDENT_GUIDE.md](STUDENT_GUIDE.md).
+
+## Architecture
 
 ```
-WhatsApp group ──► src/index.js (Baileys)    ──► src/agent.js (Gemini function calling)
-                                                          │
-                                                          ▼
-                                     src/tools.js ──► src/canvas.js ──► CourseWorks API
+WhatsApp group
+     │  "!exie what's due this week?"
+     ▼
+src/index.js ── Baileys: linked-device WhatsApp client (no browser)
+     │
+     ▼
+src/agent.js ── Gemini function-calling loop
+     │            free Gemini models first ──► Vertex AI (paid) as fallback
+     ▼
+src/tools.js ── read-only CourseWorks tools (assignments, syllabus, modules, files, …)
+     │
+     ▼
+src/canvas.js ─ Canvas REST client ──► courseworks2.columbia.edu/api/v1
 ```
 
-## Setup
+Everything runs as one Node.js process on a small Google Cloud VM, managed by systemd.
 
-1. Node 20+ (installed at `~/.local/node/bin` — add `export PATH="$HOME/.local/node/bin:$PATH"` to `~/.zshrc`).
-2. `npm install`
-3. Fill in `.env` (see `.env.example`): `CANVAS_API_TOKEN` and `GEMINI_API_KEY` (free from aistudio.google.com).
-4. Try it in the terminal: `npm run ask -- "what's due this week?"`
-5. Start the bot: `npm start`, then scan the QR code from WhatsApp → Settings → Linked devices. The session is saved in `.baileys_auth/`, so you only scan once.
+## Components
 
-## Using it
-
-For classmates: see [STUDENT_GUIDE.md](STUDENT_GUIDE.md).
-
-In a group: start a message with `!exie` (or `@exie`; the older `!cw` also works), or @-mention the linked account.
-
-- `!exie what's due this week?`
-- `!exie when is the stats midterm?`
-- `!exie what's the reading for entrepreneurship class 6?`
-- `!exie summarize the syllabus grading for UI/UX`
-
-Direct messages to the linked account are answered without a prefix (`ANSWER_DMS=false` to turn off).
-
-## Config (`.env`)
-
-| Var | Purpose |
+| File | Role |
 |---|---|
-| `COURSE_IDS` | Comma-separated course IDs to limit the bot to (e.g. only core cohort classes). Empty = all active courses. |
-| `ALLOWED_GROUPS` | Exact WhatsApp group names the bot responds in. Empty = any group. |
-| `BOT_TRIGGERS` | Prefixes that trigger the bot. |
-| `GEMINI_MODEL` | Primary model. Default `gemini-flash-latest`. |
-| `GEMINI_FALLBACK_MODELS` | Tried in order when a model is overloaded or out of free quota. |
-| `GEMINI_THINKING` | `low` (default, faster) or `high` (slower, more careful). |
+| `src/index.js` | Connects to WhatsApp as a linked device, filters messages (trigger prefix, @mention, allowed groups), keeps a short per-chat history for follow-ups, answers one question at a time per chat, and reconnects with backoff. |
+| `src/agent.js` | Sends the question plus tool definitions to Gemini, runs the tools Gemini asks for, and returns a WhatsApp-formatted answer. Handles model fallback, timeouts and caps. |
+| `src/tools.js` | Read-only CourseWorks tools exposed to Gemini. Never queries grades or submissions, and excludes personal planner notes. PDFs are passed to Gemini directly. |
+| `src/canvas.js` | Canvas API calls with pagination, a 5-minute cache, Eastern Time date formatting and HTML-to-text. |
+| `src/config.js` | Reads settings from `.env`. |
+| `src/cli.js` | Ask questions from a terminal without WhatsApp: `npm run ask -- "what's due this week?"` |
+| `deploy/` | Server setup script, systemd unit and upload script. |
+| `tests/failure-tests.sh` | Recovery and failure tests against the deployed bot. |
 
-## Notes
+## External services
 
-- The bot sees CourseWorks **as the token owner**: only courses that person is enrolled in. Grades and submissions are never queried.
-- Baileys is an unofficial WhatsApp client (no browser; ~100–200 MB RAM). Using it on a spare number is safest; WhatsApp can ban accounts it flags as automated.
-- Canvas responses are cached for 5 minutes.
-- Free-tier Gemini quotas are per model (e.g. 20 requests/day for the newest Flash). A question uses 3–7 requests, so the bot rotates through several free models and skips any that are exhausted until their quota resets. If all are exhausted it replies that it has hit its free limit.
-- On the free tier Google may use prompts to improve its products; don't use it for anything sensitive.
+| Service | Used for | Credential |
+|---|---|---|
+| CourseWorks (Canvas) API | Course data | Personal access token (`CANVAS_API_TOKEN`). The bot sees only that person's courses. |
+| WhatsApp (via Baileys) | Sending and receiving messages | A dedicated number, linked by scanning a QR code. Session stored in `.baileys_auth/`. |
+| Gemini API, free tier | Default AI model | API key from aistudio.google.com (`GEMINI_API_KEY`) |
+| Vertex AI | Paid fallback model | The VM's service account (needs the **Vertex AI User** role and full Cloud API access scope) |
+| Google Compute Engine | Hosting | e2-micro VM in a free-tier region (us-east1), Ubuntu 24.04, standard 30 GB disk |
 
-## Running 24/7 on a server
+## How a question is answered
 
-Any Ubuntu 24.04 / Debian 12 server with 1 GB+ RAM — e.g. Oracle Cloud Always Free `VM.Standard.E2.1.Micro` (username `ubuntu`).
+1. A message in an allowed group starts with a trigger (`!exie`, `@exie`, `!cw`) or @mentions the bot. Direct messages are answered only when they start with a trigger.
+2. The agent calls Gemini with the question, the current date and the last few chat messages. Gemini calls CourseWorks tools (usually 3–7 rounds) and writes the answer.
+3. Model selection for each call:
+   - **Free models first**, in order (`GEMINI_MODEL`, then `GEMINI_FALLBACK_MODELS`). A model that's out of daily quota (429) is skipped until its quota resets.
+   - **Vertex AI** (`VERTEX_MODELS`) takes over when a free model is overloaded (5xx), takes more than 30 seconds, rejects the key, or when every free model is out of quota. Once a question uses Vertex, it stays on Vertex.
+   - At most `VERTEX_DAILY_CAP` questions a day use Vertex, and each question gets 3 minutes. Past either limit the bot replies "I'm overloaded right now. Try again in a few minutes."
+4. The reply is quoted under the question and starts with 🎓. "Typing…" stays visible while the bot works.
 
-1. Create the server with your SSH public key and make sure you can `ssh ubuntu@SERVER_IP`.
-2. From this folder on your Mac: `bash deploy/upload.sh ubuntu@SERVER_IP`
-   (copies the project and `.env`, installs Node, and starts a systemd service that restarts on crash/reboot).
-3. Scan the QR code shown by `sudo journalctl -u courseworks-bot -f -o cat` with the bot's WhatsApp account.
+## Configuration (`.env`)
 
-Useful commands on the server:
+Copy `.env.example` to `.env`. It's in `.gitignore`, so it never goes to GitHub.
 
-- Logs: `sudo journalctl -u courseworks-bot -f -o cat`
-- Restart: `sudo systemctl restart courseworks-bot`
-- Deploy code changes: rerun `bash deploy/upload.sh ubuntu@SERVER_IP` from your Mac.
+| Variable | Purpose | Default |
+|---|---|---|
+| `CANVAS_API_TOKEN` | CourseWorks personal access token | required |
+| `CANVAS_BASE_URL` | Canvas URL | `https://courseworks2.columbia.edu` |
+| `GEMINI_API_KEY` | Free-tier Gemini key | required |
+| `GEMINI_MODEL` / `GEMINI_FALLBACK_MODELS` | Free models, tried in order | `gemini-flash-latest`, then other Flash models |
+| `GEMINI_THINKING` | `low` (faster) or `high` | `low` |
+| `VERTEX_PROJECT` | Google Cloud project for the paid fallback. Empty disables it. | empty |
+| `VERTEX_LOCATION` / `VERTEX_MODELS` | Vertex region and models | `global`; `gemini-3.5-flash-lite,gemini-3.8-flash` |
+| `VERTEX_DAILY_CAP` | Max questions per day that use Vertex | `20` |
+| `PAID_FIRST` | `true` sends every question to Vertex first | `false` |
+| `BOT_TRIGGERS` | Message prefixes that trigger the bot | `!exie,@exie,!cw` |
+| `ALLOWED_GROUPS` | Exact group names the bot answers in. Empty means any group. | empty |
+| `ANSWER_DMS` | Answer DMs without a trigger prefix | `false` |
+| `COURSE_IDS` | Limit to specific Canvas course IDs. Empty means all active courses. | empty |
+| `CONTEXT_MESSAGES` | Recent chat messages passed along for follow-ups | `8` |
+| `TIMEZONE` | Timezone for dates | `America/New_York` |
 
-Stop the bot on your Mac before starting it on the server; one WhatsApp link per bot.
+## Running locally
 
-## Failure tests
-
-Checks that the deployed bot recovers from crashes, a rejected Gemini key, both AI providers being down, a rejected CourseWorks token and a network cut, and that personal planner notes never reach the chat. It briefly kills the live bot and cuts its network for ~2.5 minutes; costs a few cents of Vertex AI.
+Requires Node 20+.
 
 ```
-bash tests/failure-tests.sh will@SERVER_IP            # ~4 min
+npm install
+npm run ask -- "what's due this week?"   # terminal only, no WhatsApp
+npm start                                 # full bot; scan the QR code it prints
+```
+
+Only one copy of the bot should be linked to WhatsApp at a time, so stop the server's copy before running `npm start` locally.
+
+## Server
+
+The bot runs on a Google Cloud e2-micro VM (1 GB RAM; the bot uses about 50–130 MB):
+
+- **Code location:** `/opt/courseworks-bot`
+- **Service:** `courseworks-bot`, running as the `cwbot` user. systemd restarts it 10 seconds after a crash and starts it at boot.
+- **Swap:** 2 GB of swap is configured.
+- **Login:** SSH as the user from the key added to the VM (`will`).
+
+**Deploy:** from this folder on your Mac. This copies the code and `.env`, installs Node and dependencies, and restarts the service. The WhatsApp session is kept.
+```
+bash deploy/upload.sh will@SERVER_IP
+```
+
+**First-time WhatsApp link:** show the QR code, then scan it from the bot's phone under WhatsApp → Settings → Linked devices.
+```
+ssh will@SERVER_IP 'sudo journalctl -u courseworks-bot -f -o cat'
+```
+
+**Useful commands on the server:**
+```
+sudo journalctl -u courseworks-bot -f -o cat     # live logs
+sudo systemctl restart courseworks-bot           # restart
+systemctl status courseworks-bot                 # status and memory
+```
+
+The VM's external IP is ephemeral. It survives reboots but changes if the VM is stopped and started.
+
+## Tests
+
+`tests/failure-tests.sh` runs against the deployed bot. It checks that:
+- the bot recovers from a crash,
+- it falls back to Vertex when the free key is rejected,
+- it replies "overloaded" when both AI providers are down,
+- it handles a rejected CourseWorks token,
+- personal planner notes never reach the chat,
+- and it reconnects after a network cut.
+
+```
+bash tests/failure-tests.sh will@SERVER_IP            # ~4 min; kills the bot once, cuts its network ~2.5 min
 bash tests/failure-tests.sh will@SERVER_IP --quick    # skip the network test (~1 min)
 bash tests/failure-tests.sh will@SERVER_IP --reboot   # also reboot the server
 ```
+
+## Security and limits
+
+- **Secrets:** `.env` and `.baileys_auth/` are excluded from git. On the server, `.env` is readable only by `cwbot`.
+- **Read-only access:** the bot only reads CourseWorks and never queries grades or submissions. Questions and course content are sent to Google Gemini.
+- **Unofficial client:** Baileys is an unofficial WhatsApp client, so WhatsApp can unlink or ban the number. The bot uses a dedicated number and avoids 1:1 replies to non-contacts by default.
+- **Linked-device timeout:** if the bot's phone stays offline for about 14 days, WhatsApp unlinks the bot. It then clears its session and prints a new QR code to scan.
+- **In-memory state:** quota cooldowns and the Vertex daily count live in memory and reset when the bot restarts.
