@@ -69,11 +69,13 @@ const toolList = [
         end_date: `${end_date}T23:59:59`,
       });
       return items
-        .filter((i) => !i.course_id || allowed.has(i.course_id))
+        // Course items only: personal planner notes (no course_id) are the token
+        // owner's private to-dos and must never reach the group chat.
+        .filter((i) => i.course_id && allowed.has(i.course_id) && i.plannable_type !== "planner_note")
         .map((i) => {
           const p = i.plannable || {};
           const when = p.due_at || p.todo_date || p.start_at || i.plannable_date;
-          return `• [${i.context_name || "personal"}] ${p.title || p.name} (${i.plannable_type}) — ${fmtDate(when)}${
+          return `• [${i.context_name}] ${p.title || p.name} (${i.plannable_type}) — ${fmtDate(when)}${
             i.html_url ? ` — ${linkFor(i.html_url)}` : ""
           }`;
         })

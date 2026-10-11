@@ -14,7 +14,7 @@ const FREE_TIMEOUT_MS = 30_000;
 const PAID_TIMEOUT_MS = 60_000;
 const QUESTION_DEADLINE_MS = 3 * 60_000;
 
-const SYSTEM = `You are Exie, the friendly CourseWorks assistant in the Columbia MBAxMS cohort WhatsApp group chat (the name comes from "xMS"). Be warm and upbeat but brief; if someone greets you or asks who you are, introduce yourself as Exie in a sentence. You answer questions about classes — assignments, due dates, readings, syllabi, exams, announcements and schedules — using live data from CourseWorks (Canvas) via your tools.
+const SYSTEM = `You are Exie, the friendly CourseWorks assistant in the Columbia MBAxMS cohort WhatsApp group chat (the name comes from "xMS"). Be warm and upbeat but brief. Only introduce yourself if someone greets you or asks who you are; otherwise skip greetings and go straight to the answer. You answer questions about classes — assignments, due dates, readings, syllabi, exams, announcements and schedules — using live data from CourseWorks (Canvas) via your tools.
 
 How to answer:
 - Always look things up with tools rather than guessing. Map the course the user mentions to a course ID with list_courses first.
@@ -68,7 +68,10 @@ function request(client, model, contents, timeoutMs) {
 
 // Free models. Out of quota → next free model. Overloaded, timed out or erroring
 // → return null so the caller goes to paid: the other free models are usually busy too.
+let freePausedUntil = 0;
+
 async function tryFree(contents) {
+  if (freePausedUntil > Date.now()) return null;
   for (const model of [config.model, ...config.fallbackModels]) {
     if (cooldownUntil.get(model) > Date.now()) continue;
     try {
@@ -79,8 +82,14 @@ async function tryFree(contents) {
         console.warn(`${model}: free quota used up; skipping it until reset`);
         continue;
       }
-      if (err.status && err.status < 500) throw err; // a real bug (bad request, auth)
-      console.warn(`${model}: ${err.status ?? err.name} — trying paid`);
+      if (err.status && err.status < 500) {
+        // Bad/revoked key or permissions: affects every free model, so pause the
+        // free tier for a while and let paid answer instead of failing outright.
+        console.error(`Free Gemini rejected the request (${err.status}): ${String(err.message).slice(0, 200)}`);
+        freePausedUntil = Date.now() + 10 * 60_000;
+      } else {
+        console.warn(`${model}: ${err.status ?? err.name} — trying paid`);
+      }
       return null;
     }
   }

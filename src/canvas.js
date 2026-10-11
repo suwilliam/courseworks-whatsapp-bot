@@ -39,7 +39,10 @@ export async function canvasGet(path, params = {}, { maxPages = 10 } = {}) {
   let results = null;
   for (let page = 0; url && page < maxPages; page++) {
     const res = await fetch(url, { headers: { Authorization: `Bearer ${config.canvasToken}` } });
-    if (!res.ok) throw new CanvasError(res.status, path, await res.text());
+    if (!res.ok) {
+      if (res.status === 401) console.error("CourseWorks rejected the token (401): replace CANVAS_API_TOKEN in .env");
+      throw new CanvasError(res.status, path, await res.text());
+    }
     const data = await res.json();
     if (!Array.isArray(data)) {
       results = data;

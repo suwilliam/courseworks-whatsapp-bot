@@ -182,7 +182,7 @@ async function connect() {
       // After a QR scan WhatsApp sends restartRequired and expects an immediate
       // reconnect; waiting lets it drop the new device. Expired QR codes (408
       // before login) aren't failures either, so neither should back off.
-      const loggedIn = Boolean(sock.authState.creds.registered);
+      const loggedIn = Boolean(sock.authState.creds.me); // set once paired by QR or code
       if (code === DisconnectReason.restartRequired || (!loggedIn && code === DisconnectReason.timedOut)) {
         console.log(code === DisconnectReason.restartRequired ? "Paired — reconnecting…" : "QR code expired; showing a new one.");
         reconnectDelay = 2000;
