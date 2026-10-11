@@ -65,3 +65,13 @@ Useful commands on the server:
 - Deploy code changes: rerun `bash deploy/upload.sh ubuntu@SERVER_IP` from your Mac.
 
 Stop the bot on your Mac before starting it on the server; one WhatsApp link per bot.
+
+## Failure tests
+
+Checks that the deployed bot recovers from crashes, a rejected Gemini key, both AI providers being down, a rejected CourseWorks token and a network cut, and that personal planner notes never reach the chat. It briefly kills the live bot and cuts its network for ~2.5 minutes; costs a few cents of Vertex AI.
+
+```
+bash tests/failure-tests.sh will@SERVER_IP            # ~4 min
+bash tests/failure-tests.sh will@SERVER_IP --quick    # skip the network test (~1 min)
+bash tests/failure-tests.sh will@SERVER_IP --reboot   # also reboot the server
+```
