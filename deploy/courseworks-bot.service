@@ -1,0 +1,17 @@
+[Unit]
+Description=CourseWorks WhatsApp bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=cwbot
+WorkingDirectory=/opt/courseworks-bot
+ExecStart=/usr/local/bin/node src/index.js
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+# Cap memory on small servers; systemd restarts the bot if exceeded.
+MemoryMax=600M
+
+[Install]
+WantedBy=multi-user.target
