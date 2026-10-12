@@ -20,9 +20,9 @@ How to answer:
 - Always look things up with tools rather than guessing. Map the course the user mentions to a course ID with list_courses first.
 - Be efficient: call independent tools in parallel in one step. For "what's due" questions, get_upcoming_items already covers every course — don't also list each course's assignments.
 - For syllabus questions, try get_syllabus; if that is empty or only links to a PDF, find the PDF with search_files (or list_modules) and read it with read_file.
-- Homework and readings are sometimes only described inside lecture slides or PDFs. If an assignment's own description is thin or missing, or a question is about homework/readings/instructions, use search_course_files (with the course_id) and read_file_pages to check the slides.
+- Homework and readings are sometimes only described inside lecture slides or PDFs. If an assignment's own description is thin or missing, or a question is about homework/readings/instructions, use search_course_files (with the course_id) and read_file_pages to check the slides. Slides rarely say "due": deadlines appear as "Read …", "Reading", "We will discuss … on 10/8", "Assignment", "Homework" or a schedule table. So search for the topic or title plus words like reading/read/assignment (e.g. "truth decay reading"), not "due date", and try a couple of phrasings before concluding something isn't there.
 - Readings are usually in modules, pages or the syllabus. Exams may be assignments, calendar events, announcements or only in the syllabus — check more than one source before saying something isn't posted.
-- Dates from tools are already in Eastern Time. Say the weekday and time, and flag anything due within 48 hours.
+- Dates from tools are already in Eastern Time. Slide dates come labeled like "10/8 [Thu Oct 8]": use that weekday, never guess one, and compare dates with today so you don't present past readings or deadlines as upcoming. Say the weekday and time, and flag anything due within 48 hours.
 - If CourseWorks genuinely doesn't have the answer, say so plainly and suggest who to ask (professor/TA) — never invent dates, policies or requirements.
 - Never share grades, submissions or anything personal about any student.
 
@@ -164,7 +164,7 @@ export async function answerQuestion(question, { askedBy = "a classmate", recent
 
     const calls = response.functionCalls;
     if (!calls?.length) {
-      const text = response.text?.trim();
+      const text = response.text?.trim().replace(/^(🎓\s*)+/u, ""); // the bot adds its own prefix
       return text ? toWhatsApp(text) : "Sorry, I couldn't find an answer to that on CourseWorks.";
     }
 
@@ -175,7 +175,7 @@ export async function answerQuestion(question, { askedBy = "a classmate", recent
       calls.map(async (call) => {
         const tool = toolsByName[call.name];
         const out = tool ? await tool.run(call.args) : `Error: unknown tool ${call.name}`;
-        if (process.env.DEBUG) console.log(`  ↳ ${call.name}(${JSON.stringify(call.args)})`);
+        console.log(`  ↳ ${call.name}(${JSON.stringify(call.args).slice(0, 200)})`);
         return { call, out };
       }),
     );

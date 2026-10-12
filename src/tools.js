@@ -38,6 +38,23 @@ function safeTool({ name, description, inputSchema, run }) {
 }
 
 // Absolute link, minus any per-student "/submissions/<id>" suffix.
+// Slides write dates as "10/8" with no weekday, and the model guesses weekdays wrong.
+// Label each plausible this-term date with its real weekday: "10/8 [Thu Oct 8]".
+function labelDates(text) {
+  const now = new Date();
+  return text.replace(/\b(1[0-2]|0?[1-9])\/(3[01]|[12]\d|0?[1-9])\b(?!\/\d)/g, (m, mo, d) => {
+    for (const year of [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1]) {
+      const date = new Date(year, mo - 1, d, 12);
+      const days = (date - now) / 86_400_000;
+      if (days > -150 && days < 210) {
+        const label = date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+        return `${m} [${label.replace(",", "")}]`;
+      }
+    }
+    return m;
+  });
+}
+
 const linkFor = (path) =>
   (path.startsWith("http") ? path : `${config.canvasBaseUrl}${path}`).replace(/\/submissions\/\d+$/, "");
 
@@ -272,7 +289,7 @@ const toolList = [
       if (!hits.length) return `No matches in indexed course PDFs ${age}.`;
       return (
         hits
-          .map((h) => `• [${h.file.courseName}] ${h.file.name} — page ${h.page} [file_id: ${h.fileId}]\n   ${h.text}`)
+          .map((h) => `• [${h.file.courseName}] ${h.file.name} — page ${h.page} [file_id: ${h.fileId}]\n   ${labelDates(h.text)}`)
           .join("\n") + `\n${age}`
       );
     },
@@ -292,7 +309,7 @@ const toolList = [
       if (!allowed.includes(f.courseId)) throw new Error("File belongs to a course outside the bot's course list.");
       return pages
         .filter((n) => n <= f.pages.length)
-        .map((n) => `--- ${f.name}, page ${n} of ${f.pages.length} ---\n${f.pages[n - 1] || "(no text on this page)"}`)
+        .map((n) => `--- ${f.name}, page ${n} of ${f.pages.length} ---\n${labelDates(f.pages[n - 1] || "(no text on this page)")}`)
         .join("\n\n");
     },
   }),
