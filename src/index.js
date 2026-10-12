@@ -25,6 +25,21 @@ const startedAt = Math.floor(Date.now() / 1000);
 let sock;
 let reconnectDelay = 2000;
 
+// Tracks whether the WhatsApp connection is up, so a reply that fails during a
+// brief disconnect can wait for the reconnect and be resent instead of lost.
+let isOpen = false;
+let openWaiters = [];
+function waitForOpen(ms) {
+  if (isOpen) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms);
+    openWaiters.push(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+
 // ---------- small in-memory state ----------
 
 // Recent text per chat, for follow-up context ("when is that due?").
@@ -132,18 +147,30 @@ async function handleMessage(msg) {
           : "Sorry, something went wrong looking that up. Try again in a minute.";
     }
     clearInterval(typingTimer);
+    await sendReply(chatId, chatName, answer, msg);
+    await sock.sendPresenceUpdate("paused", chatId).catch(() => {});
+  });
+}
+
+// Send with retries: if the connection drops at the wrong moment, wait for the
+// bot to reconnect (it does so within seconds) and try again, up to 3 times.
+async function sendReply(chatId, chatName, answer, msg) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       // linkPreview: null skips fetching previews for the URLs in answers.
       const sent = await withTimeout(
         sock.sendMessage(chatId, { text: REPLY_PREFIX + answer, linkPreview: null }, { quoted: msg }),
         60_000,
       );
-      console.log(`[${chatName}] Sent reply ${sent?.key?.id ?? "(no id)"}`);
+      console.log(`[${chatName}] Sent reply ${sent?.key?.id ?? "(no id)"}${attempt > 1 ? ` (attempt ${attempt})` : ""}`);
+      return;
     } catch (err) {
-      console.error(`[${chatName}] Failed to send reply:`, err);
+      console.error(`[${chatName}] Failed to send reply (attempt ${attempt}/3): ${err.message}`);
+      if (attempt < 3 && !(await waitForOpen(60_000))) console.warn(`[${chatName}] Still disconnected; retrying anyway`);
+      await new Promise((r) => setTimeout(r, 2000)); // let the new connection settle
     }
-    await sock.sendPresenceUpdate("paused", chatId).catch(() => {});
-  });
+  }
+  console.error(`[${chatName}] Gave up sending reply after 3 attempts`);
 }
 
 // ---------- connection ----------
@@ -169,10 +196,13 @@ async function connect() {
       qrcode.generate(qr, { small: true });
     }
     if (connection === "open") {
+      isOpen = true;
+      openWaiters.splice(0).forEach((wake) => wake());
       reconnectDelay = 2000;
       console.log(`Bot ready as ${sock.user?.id}. Triggers: ${config.triggers.join(", ")}`);
     }
     if (connection === "close") {
+      isOpen = false;
       const code = lastDisconnect?.error?.output?.statusCode;
       if (code === DisconnectReason.loggedOut) {
         console.error("Logged out from the phone. Clearing session — restart to scan a new QR code.");
