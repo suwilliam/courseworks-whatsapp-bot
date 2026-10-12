@@ -45,7 +45,7 @@ Exie shows "typing…" while it looks things up, then replies with a message sta
 
 ## Which courses it knows
 
-The bot sees CourseWorks through one student's account, so it only knows courses that student is enrolled in, including:
+Exie reads CourseWorks through **Will's CourseWorks account** (read-only). It sees exactly what Will sees as a student, so it only knows courses Will is enrolled in, including:
 
 - MBAxMS Statistics & Business Analytics (Guetta)
 - Foundations of Entrepreneurship (Guzman)
@@ -61,6 +61,7 @@ If you're in a different elective or section, the bot can't see that course.
 
 - **Times are Eastern Time.** The bot flags anything due within 48 hours.
 - **It searches inside slides and PDFs** posted on CourseWorks, so it can find homework that's only described in lecture slides. New uploads show up within about 6 hours.
+- **It uses Will's account but never shares Will's grades, submissions or personal to-dos.** It only looks up course information everyone in the class can see.
 - **It only reads CourseWorks.** It can't submit work, see grades or submissions, or read Slack, email or Google Drive. Information that's only shared in class or by email won't be in its answers.
 - **It can be wrong.** Double-check important deadlines and exam details on CourseWorks. Each answer includes links you can use to check.
 - **If something isn't posted, it says so** instead of guessing. Ask the professor or TA in that case.
