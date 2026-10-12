@@ -6,7 +6,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node src/index.js",
-    "ask": "node src/cli.js"
+    "ask": "node src/cli.js",
+    "index": "node src/build-index.js"
   },
   "keywords": [],
   "author": "",
@@ -18,6 +19,7 @@
     "dotenv": "^18.0.6",
     "pino": "^10.4.0",
     "qrcode-terminal": "^0.12.0",
+    "unpdf": "^1.8.1",
     "zod": "^4.6.5"
   },
   "engines": {

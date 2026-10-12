@@ -36,8 +36,8 @@ fi
 echo "==> App user and files"
 id "$APP_USER" >/dev/null 2>&1 || useradd --system --create-home --shell /usr/sbin/nologin "$APP_USER"
 mkdir -p "$APP_DIR"
-# Keep the WhatsApp session (.baileys_auth) across redeploys.
-rsync -a --delete --exclude node_modules --exclude .baileys_auth "$SRC_DIR/" "$APP_DIR/"
+# Keep the WhatsApp session (.baileys_auth) and PDF index (.content_index) across redeploys.
+rsync -a --delete --exclude node_modules --exclude .baileys_auth --exclude .content_index "$SRC_DIR/" "$APP_DIR/"
 [ -f "$APP_DIR/.env" ] || { echo "Missing .env — upload it with the project."; exit 1; }
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 chmod 600 "$APP_DIR/.env"
@@ -47,10 +47,13 @@ cd "$APP_DIR"
 sudo -u "$APP_USER" -H npm ci --omit=dev
 
 echo "==> systemd service"
-cp "$APP_DIR/deploy/courseworks-bot.service" /etc/systemd/system/
+cp "$APP_DIR/deploy/courseworks-bot.service" "$APP_DIR/deploy/courseworks-index.service" "$APP_DIR/deploy/courseworks-index.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable courseworks-bot
 systemctl restart courseworks-bot
+systemctl enable --now courseworks-index.timer
+# Build/refresh the PDF index in the background (first run takes a few minutes).
+systemctl start --no-block courseworks-index.service
 
 cat <<MSG
 

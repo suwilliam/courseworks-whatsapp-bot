@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh CourseWorks PDF search index
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=cwbot
+WorkingDirectory=/opt/courseworks-bot
+ExecStart=/usr/local/bin/node src/build-index.js
+# Runs separately from the bot so a large PDF can't affect it.
+Nice=10
+MemoryMax=700M

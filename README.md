@@ -15,12 +15,12 @@ src/agent.js ── Gemini function-calling loop
      │            free Gemini models first ──► Vertex AI (paid) as fallback
      ▼
 src/tools.js ── read-only CourseWorks tools (assignments, syllabus, modules, files, …)
-     │
+     │                 └── search inside course PDFs ◄── .content_index/ (built by src/build-index.js)
      ▼
 src/canvas.js ─ Canvas REST client ──► courseworks2.columbia.edu/api/v1
 ```
 
-Everything runs as one Node.js process on a small Google Cloud VM, managed by systemd.
+The bot runs as one Node.js process on a small Google Cloud VM, managed by systemd. A separate indexer refreshes a full-text index of course PDFs every 6 hours.
 
 ## Components
 
@@ -29,6 +29,8 @@ Everything runs as one Node.js process on a small Google Cloud VM, managed by sy
 | `src/index.js` | Connects to WhatsApp as a linked device, filters messages (trigger prefix, @mention, allowed groups), keeps a short per-chat history for follow-ups, answers one question at a time per chat, and reconnects with backoff. |
 | `src/agent.js` | Sends the question plus tool definitions to Gemini, runs the tools Gemini asks for, and returns a WhatsApp-formatted answer. Handles model fallback, timeouts and caps. |
 | `src/tools.js` | Read-only CourseWorks tools exposed to Gemini. Never queries grades or submissions, and excludes personal planner notes. PDFs are passed to Gemini directly. |
+| `src/build-index.js` | Indexer: downloads course PDFs (slides, handouts, syllabi), extracts text page by page into `.content_index/index.json`. Only new or changed files are processed. Runs as its own process (`npm run index` or the `courseworks-index` timer). |
+| `src/content-index.js` | Loads the index and runs keyword searches over pages, used by the `search_course_files` and `read_file_pages` tools. Lets the bot find homework that only appears inside lecture slides. |
 | `src/canvas.js` | Canvas API calls with pagination, a 5-minute cache, Eastern Time date formatting and HTML-to-text. |
 | `src/config.js` | Reads settings from `.env`. |
 | `src/cli.js` | Ask questions from a terminal without WhatsApp: `npm run ask -- "what's due this week?"` |
@@ -95,6 +97,7 @@ The bot runs on a Google Cloud e2-micro VM (1 GB RAM; the bot uses about 50–13
 
 - **Code location:** `/opt/courseworks-bot`
 - **Service:** `courseworks-bot`, running as the `cwbot` user. systemd restarts it 10 seconds after a crash and starts it at boot.
+- **PDF index:** the `courseworks-index` timer refreshes the PDF index 5 minutes after boot and every 6 hours. The index lives in `/opt/courseworks-bot/.content_index` and is kept across deploys.
 - **Swap:** 2 GB of swap is configured.
 - **Login:** SSH as the user from the key added to the VM (`will`).
 
@@ -112,6 +115,8 @@ ssh will@SERVER_IP 'sudo journalctl -u courseworks-bot -f -o cat'
 ```
 sudo journalctl -u courseworks-bot -f -o cat     # live logs
 sudo systemctl restart courseworks-bot           # restart
+sudo systemctl start courseworks-index           # refresh the PDF index now
+sudo journalctl -u courseworks-index -o cat      # indexer results
 systemctl status courseworks-bot                 # status and memory
 ```
 
@@ -135,7 +140,7 @@ bash tests/failure-tests.sh will@SERVER_IP --reboot   # also reboot the server
 
 ## Security and limits
 
-- **Secrets:** `.env` and `.baileys_auth/` are excluded from git. On the server, `.env` is readable only by `cwbot`.
+- **Secrets:** `.env`, `.baileys_auth/` and `.content_index/` (copies of course materials) are excluded from git. On the server, `.env` is readable only by `cwbot`.
 - **Read-only access:** the bot only reads CourseWorks and never queries grades or submissions. Questions and course content are sent to Google Gemini.
 - **Unofficial client:** Baileys is an unofficial WhatsApp client, so WhatsApp can unlink or ban the number. The bot uses a dedicated number and avoids 1:1 replies to non-contacts by default.
 - **Linked-device timeout:** if the bot's phone stays offline for about 14 days, WhatsApp unlinks the bot. It then clears its session and prints a new QR code to scan.

@@ -26,6 +26,7 @@ Exie shows "typing…" while it looks things up, then replies with a message sta
 **Readings and class prep**
 - `!exie what readings do we have for entrepreneurship class 6?`
 - `!exie what should I prepare for the next human-centered design class?`
+- `!exie what homework did the last tough tech slides assign?`
 
 **Syllabus and grading**
 - `!exie what's the grading breakdown for tough tech?`
@@ -59,6 +60,7 @@ If you're in a different elective or section, the bot can't see that course.
 ## Good to know
 
 - **Times are Eastern Time.** The bot flags anything due within 48 hours.
+- **It searches inside slides and PDFs** posted on CourseWorks, so it can find homework that's only described in lecture slides. New uploads show up within about 6 hours.
 - **It only reads CourseWorks.** It can't submit work, see grades or submissions, or read Slack, email or Google Drive. Information that's only shared in class or by email won't be in its answers.
 - **It can be wrong.** Double-check important deadlines and exam details on CourseWorks. Each answer includes links you can use to check.
 - **If something isn't posted, it says so** instead of guessing. Ask the professor or TA in that case.

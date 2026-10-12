@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { config } from "./config.js";
 import { canvasGet, canvasDownload, listCourses, fmtDate, htmlToText } from "./canvas.js";
+import { getFile, searchPages } from "./content-index.js";
 
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 const courseId = z.number().int().describe("Canvas course ID (from list_courses)");
@@ -250,6 +251,49 @@ const toolList = [
             `${e.description ? `\n   ${htmlToText(e.description, 300)}` : ""}`,
         )
         .join("\n");
+    },
+  }),
+
+  safeTool({
+    name: "search_course_files",
+    description:
+      "Full-text search INSIDE course PDFs (lecture slides, handouts, syllabi, case packets). Use it when homework, readings, " +
+      "deadlines or instructions aren't in the assignment/page itself — e.g. an assignment only described on a slide. " +
+      "Returns the best-matching pages with file_id and page number; use read_file_pages for the full text.",
+    inputSchema: z.object({
+      query: z.string().describe("Keywords, e.g. 'homework due', 'design decode assignment', 'case reading session 6'"),
+      course_id: courseId.optional().describe("Limit to one course (recommended)"),
+    }),
+    run: async ({ query, course_id }) => {
+      const allowed = (await listCourses()).map((c) => c.id);
+      const { index, hits } = searchPages(query, { courseIds: course_id ? [course_id] : allowed });
+      if (!index) return "The course-file index hasn't been built yet. Use search_files / read_file instead.";
+      const age = `(index updated ${fmtDate(index.builtAt)})`;
+      if (!hits.length) return `No matches in indexed course PDFs ${age}.`;
+      return (
+        hits
+          .map((h) => `• [${h.file.courseName}] ${h.file.name} — page ${h.page} [file_id: ${h.fileId}]\n   ${h.text}`)
+          .join("\n") + `\n${age}`
+      );
+    },
+  }),
+
+  safeTool({
+    name: "read_file_pages",
+    description: "Full text of specific pages of an indexed course PDF (cheaper than read_file for long slide decks).",
+    inputSchema: z.object({
+      file_id: z.number().int(),
+      pages: z.array(z.number().int().min(1)).min(1).max(10).describe("1-based page numbers, e.g. the hit page ±1"),
+    }),
+    run: async ({ file_id, pages }) => {
+      const f = getFile(file_id);
+      if (!f) return "That file isn't in the index. Use read_file instead.";
+      const allowed = (await listCourses()).map((c) => c.id);
+      if (!allowed.includes(f.courseId)) throw new Error("File belongs to a course outside the bot's course list.");
+      return pages
+        .filter((n) => n <= f.pages.length)
+        .map((n) => `--- ${f.name}, page ${n} of ${f.pages.length} ---\n${f.pages[n - 1] || "(no text on this page)"}`)
+        .join("\n\n");
     },
   }),
 
