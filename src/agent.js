@@ -97,11 +97,28 @@ async function tryFree(contents) {
   return null;
 }
 
+// Vertex only accepts thought signatures it produced itself, so a conversation the
+// free API started can't be continued there. Restart from the original question
+// (contents[0]); CourseWorks lookups are cached, so redoing them is quick.
+function restartFromQuestion(contents, why) {
+  if (contents.length > 1) {
+    console.warn(`  (restarting question on paid: ${why})`);
+    contents.splice(1);
+  }
+}
+
 async function tryPaid(contents) {
   let lastErr;
   for (const model of config.vertexModels) {
     try {
-      const response = await request(paid, model, contents, PAID_TIMEOUT_MS);
+      let response;
+      try {
+        response = await request(paid, model, contents, PAID_TIMEOUT_MS);
+      } catch (err) {
+        if (err.status !== 400 || !/thought signature/i.test(err.message) || contents.length === 1) throw err;
+        restartFromQuestion(contents, "history from another model");
+        response = await request(paid, model, contents, PAID_TIMEOUT_MS);
+      }
       const u = response.usageMetadata || {};
       console.log(`  (answered by paid ${model}: ${u.promptTokenCount ?? "?"} in, ${(u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0)} out)`);
       return response;
@@ -123,6 +140,7 @@ async function generate(contents, ctx) {
 
   if (!paid) throw new OutOfQuotaError("Free models unavailable and no paid fallback configured.");
   if (!claimPaidQuestion(ctx)) throw new OutOfQuotaError("Daily paid-question cap reached.");
+  restartFromQuestion(contents, "switched from free mid-question");
   return tryPaid(contents);
 }
 

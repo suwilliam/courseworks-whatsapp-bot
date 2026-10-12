@@ -43,6 +43,25 @@ out=$(remote "cd $APP && sudo -u cwbot env GEMINI_API_KEY=invalid-key-for-test n
 code=$?
 if [[ $code -eq 0 && $out == *"Free Gemini rejected"* && $out != *"Error:"*Unhandled* ]]; then pass "fell back to paid and answered"; else fail "no fallback (exit $code): $(echo "$out" | tail -2)"; fi
 
+echo "== 2b. Free answers one step, then fails mid-question → restarts on paid and answers"
+# Vertex rejects history started by the free API ("Invalid thought signature"), so the
+# bot must restart the question on paid. Simulated by failing the free API after one success.
+out=$(remote "cd $APP && sudo -u cwbot node --env-file=.env -e '
+  const realFetch = globalThis.fetch; let freeOk = 0;
+  globalThis.fetch = async (url, opts) => {
+    const isFree = String(url).includes(\"generativelanguage.googleapis.com\");
+    if (isFree && freeOk >= 1) return new Response(JSON.stringify({ error: { code: 503, message: \"simulated\", status: \"UNAVAILABLE\" } }), { status: 503, headers: { \"content-type\": \"application/json\" } });
+    const res = await realFetch(url, opts);
+    if (isFree && res.ok) freeOk++;
+    return res;
+  };
+  const { answerQuestion } = await import(\"./src/agent.js\");
+  try { const a = await answerQuestion(\"what is due this week?\"); console.log(\"RESULT\", freeOk ? \"switched\" : \"no-free-step\", a.length > 20 ? \"answered\" : \"empty\"); }
+  catch (e) { console.log(\"RESULT failed\", e.message.slice(0, 120)); }' 2>&1 | grep RESULT")
+if [[ $out == "RESULT switched answered" ]]; then pass "restarted on paid after mid-question switch"
+elif [[ $out == "RESULT no-free-step answered" ]]; then pass "answered (free tier was unavailable, so the switch path wasn't exercised)"
+else fail "$out"; fi
+
 echo "== 3. Free and paid both down → 'overloaded' error, not silence"
 out=$(remote "cd $APP && sudo -u cwbot env GEMINI_API_KEY=invalid-key-for-test VERTEX_PROJECT=nonexistent-project-xyz node --env-file=.env -e '
   import(\"./src/agent.js\").then(async ({ answerQuestion, OutOfQuotaError }) => {
