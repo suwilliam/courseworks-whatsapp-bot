@@ -55,7 +55,7 @@ The bot runs as one Node.js process on a small Google Cloud VM, managed by syste
    - **Free models first**, in order (`GEMINI_MODEL`, then `GEMINI_FALLBACK_MODELS`). A model that's out of daily quota (429) is skipped until its quota resets.
    - **Vertex AI** (`VERTEX_MODELS`) takes over when a free model is overloaded (5xx), takes more than 30 seconds, rejects the key, or when every free model is out of quota. Once a question uses Vertex, it stays on Vertex.
    - At most `VERTEX_DAILY_CAP` questions a day use Vertex, and each question gets 3 minutes. Past either limit the bot replies "I'm overloaded right now. Try again in a few minutes."
-4. The reply is quoted under the question and starts with 🎓. "Typing…" stays visible while the bot works.
+4. The reply is quoted under the question and starts with 🎓. "Typing…" stays visible while the bot works. If an answer takes more than 30 seconds, Exie first posts a one-time "Still looking, give me a few more seconds…". Failed AI calls are retried once before falling back, which students don't see.
 
 ## PDF search index
 
@@ -125,6 +125,7 @@ Copy `.env.example` to `.env`. It's in `.gitignore`, so it never goes to GitHub.
 | `ALLOWED_GROUPS` | Exact group names the bot answers in. Empty means any group. | empty |
 | `ANSWER_DMS` | Answer DMs without a trigger prefix | `false` |
 | `COURSE_IDS` | Limit to specific Canvas course IDs. Empty means all active courses. | empty |
+| `HOLDING_MESSAGE_AFTER_SECONDS` | Post "Still looking, give me a few more seconds…" once if an answer takes longer than this; `0` turns it off | `30` |
 | `CONTEXT_MESSAGES` | Recent chat messages passed along for follow-ups | `8` |
 | `TIMEZONE` | Timezone for dates | `America/New_York` |
 

@@ -44,6 +44,8 @@ export const config = {
   // Answer direct messages without a trigger prefix. Off by default: WhatsApp
   // removes new linked devices that reply 1:1 to non-contacts ("reachout timelock").
   answerDirectMessages: (process.env.ANSWER_DMS || "false") === "true",
+  // Post "Still looking…" once if an answer takes longer than this (0 = never).
+  holdingMessageAfterSeconds: Number(process.env.HOLDING_MESSAGE_AFTER_SECONDS ?? 30),
   // How many recent chat messages to pass along for follow-up context.
   contextMessages: Number(process.env.CONTEXT_MESSAGES || 8),
 };

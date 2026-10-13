@@ -12,7 +12,7 @@ In the cohort group chat, start your message with **`!exie`**:
 
 You can also @mention Exie instead of typing `!exie`, or type `@exie`.
 
-Exie shows "typing…" while it looks things up, then replies with a message starting with 🎓. Most answers take **10–30 seconds**. When Google's AI servers are busy, an answer can take a couple of minutes.
+Exie shows "typing…" while it looks things up, then replies with a message starting with 🎓. Most answers take **10–30 seconds**. When Google's AI servers are busy, an answer can take a couple of minutes. If it's taking a while, Exie posts "Still looking, give me a few more seconds…" first.
 
 **Please ask in the group, not in a direct message.** WhatsApp may disconnect the bot if it replies to lots of people one-on-one.
 

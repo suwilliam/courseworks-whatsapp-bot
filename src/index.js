@@ -135,6 +135,16 @@ async function handleMessage(msg) {
     const typing = () => sock.sendPresenceUpdate("composing", chatId).catch(() => {});
     typing();
     const typingTimer = setInterval(typing, 10_000);
+    // On slow answers, post one short holding message so people know Exie is still on it.
+    const holdingTimer =
+      config.holdingMessageAfterSeconds > 0 &&
+      setTimeout(() => {
+        sock
+          .sendMessage(chatId, { text: `${REPLY_PREFIX}Still looking, give me a few more seconds…` }, { quoted: msg })
+          .then(() => console.log(`[${chatName}] Sent holding message`))
+          .catch(() => {});
+        typing();
+      }, config.holdingMessageAfterSeconds * 1000);
     let answer;
     try {
       answer = await answerQuestion(question, { askedBy: msg.pushName || "a classmate", recentChat });
@@ -147,6 +157,7 @@ async function handleMessage(msg) {
           : "Sorry, something went wrong looking that up. Try again in a minute.";
     }
     clearInterval(typingTimer);
+    clearTimeout(holdingTimer);
     await sendReply(chatId, chatName, answer, msg);
     await sock.sendPresenceUpdate("paused", chatId).catch(() => {});
   });
