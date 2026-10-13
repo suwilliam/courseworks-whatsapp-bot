@@ -10,7 +10,10 @@ const paid = config.vertexProject
   : null;
 
 const MAX_STEPS = 15;
-const FREE_TIMEOUT_MS = 30_000;
+const FREE_TIMEOUT_MS = 20_000; // per free request
+const FREE_BUDGET_MS = 25_000;
+const FINAL_NUDGE =
+  "You've used all your lookups. Answer now from what you found; if the information isn't posted, say so and share the closest relevant thing you did find."; // total free-tier time per question before switching to paid
 const PAID_TIMEOUT_MS = 60_000;
 const QUESTION_DEADLINE_MS = 3 * 60_000;
 
@@ -20,7 +23,7 @@ How to answer:
 - Always look things up with tools rather than guessing. Map the course the user mentions to a course ID with list_courses first.
 - Be efficient: call independent tools in parallel in one step. For "what's due" questions, get_upcoming_items already covers every course — don't also list each course's assignments.
 - For syllabus questions, try get_syllabus; if that is empty or only links to a PDF, find the PDF with search_files (or list_modules) and read it with read_file.
-- Homework and readings are sometimes only described inside lecture slides or PDFs. If an assignment's own description is thin or missing, or a question is about homework/readings/instructions, use search_course_files (with the course_id) and read_file_pages to check the slides. Slides rarely say "due": deadlines appear as "Read …", "Reading", "We will discuss … on 10/8", "Assignment", "Homework" or a schedule table. So search for the topic or title plus words like reading/read/assignment (e.g. "truth decay reading"), not "due date", and try a couple of phrasings before concluding something isn't there.
+- Homework and readings are sometimes only described inside lecture slides or PDFs. If an assignment's own description is thin or missing, or a question is about homework/readings/instructions, use search_course_files (with the course_id) and read_file_pages to check the slides. Slides rarely say "due": deadlines appear as "Read …", "Reading", "We will discuss … on 10/8", "Assignment", "Homework" or a schedule table. So search for the topic or title plus words like reading/read/assignment (e.g. "truth decay reading"), not "due date", and try a couple of phrasings before concluding something isn't there. Most questions need 3–6 lookups; if about 8 turn up nothing, stop and say it isn't posted yet (mentioning the most recent related item you did find, with its date).
 - Readings are usually in modules, pages or the syllabus. Exams may be assignments, calendar events, announcements or only in the syllabus — check more than one source before saying something isn't posted.
 - Dates from tools are already in Eastern Time. Slide dates come labeled like "10/8 [Thu Oct 8]": use that weekday, never guess one, and compare dates with today so you don't present past readings or deadlines as upcoming. Say the weekday and time, and flag anything due within 48 hours.
 - If CourseWorks genuinely doesn't have the answer, say so plainly and suggest who to ask (professor/TA) — never invent dates, policies or requirements.
@@ -53,13 +56,17 @@ function claimPaidQuestion(ctx) {
   return true;
 }
 
-function request(client, model, contents, timeoutMs) {
+function request(client, model, contents, timeoutMs, { final = false } = {}) {
   return client.models.generateContent({
     model,
     contents,
     config: {
-      systemInstruction: SYSTEM,
+      // Vertex rejects text mixed into a turn of tool results, so the "answer now"
+      // nudge for the last step goes in the system instruction instead.
+      systemInstruction: final ? `${SYSTEM}\n\n${FINAL_NUDGE}` : SYSTEM,
       tools: [{ functionDeclarations }],
+      // On the last allowed step, tools are switched off so the model must answer.
+      ...(final && { toolConfig: { functionCallingConfig: { mode: "NONE" } } }),
       automaticFunctionCalling: { disable: true },
       thinkingConfig: { thinkingLevel: config.thinkingLevel },
       abortSignal: AbortSignal.timeout(timeoutMs),
@@ -71,12 +78,19 @@ function request(client, model, contents, timeoutMs) {
 // → return null so the caller goes to paid: the other free models are usually busy too.
 let freePausedUntil = 0;
 
-async function tryFree(contents) {
+async function tryFree(contents, ctx) {
   if (freePausedUntil > Date.now()) return null;
   for (const model of [config.model, ...config.fallbackModels]) {
     if (cooldownUntil.get(model) > Date.now()) continue;
+    // A slow free tier shouldn't eat the whole question: cap its total time.
+    const remaining = FREE_BUDGET_MS - ctx.freeMs;
+    if (remaining < 3000) {
+      console.warn("  (free tier too slow for this question — trying paid)");
+      return null;
+    }
+    const started = Date.now();
     try {
-      return await request(free, model, contents, FREE_TIMEOUT_MS);
+      return await request(free, model, contents, Math.min(FREE_TIMEOUT_MS, remaining), { final: ctx.final });
     } catch (err) {
       if (err.status === 429) {
         cooldownUntil.set(model, Date.now() + quotaResetMs(err));
@@ -92,6 +106,8 @@ async function tryFree(contents) {
         console.warn(`${model}: ${err.status ?? err.name} — trying paid`);
       }
       return null;
+    } finally {
+      ctx.freeMs += Date.now() - started;
     }
   }
   return null;
@@ -107,17 +123,17 @@ function restartFromQuestion(contents, why) {
   }
 }
 
-async function tryPaid(contents) {
+async function tryPaid(contents, ctx) {
   let lastErr;
   for (const model of config.vertexModels) {
     try {
       let response;
       try {
-        response = await request(paid, model, contents, PAID_TIMEOUT_MS);
+        response = await request(paid, model, contents, PAID_TIMEOUT_MS, { final: ctx.final });
       } catch (err) {
         if (err.status !== 400 || !/thought signature/i.test(err.message) || contents.length === 1) throw err;
         restartFromQuestion(contents, "history from another model");
-        response = await request(paid, model, contents, PAID_TIMEOUT_MS);
+        response = await request(paid, model, contents, PAID_TIMEOUT_MS, { final: ctx.final });
       }
       const u = response.usageMetadata || {};
       console.log(`  (answered by paid ${model}: ${u.promptTokenCount ?? "?"} in, ${(u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0)} out)`);
@@ -133,15 +149,15 @@ async function tryPaid(contents) {
 async function generate(contents, ctx) {
   // Once a question has used paid, it stays on paid so it finishes quickly.
   // PAID_FIRST=true skips the free tier entirely (e.g. while Cloud credit lasts).
-  if (paid && (ctx.paid || config.paidFirst) && claimPaidQuestion(ctx)) return tryPaid(contents);
+  if (paid && (ctx.paid || config.paidFirst) && claimPaidQuestion(ctx)) return tryPaid(contents, ctx);
 
-  const response = await tryFree(contents);
+  const response = await tryFree(contents, ctx);
   if (response) return response;
 
   if (!paid) throw new OutOfQuotaError("Free models unavailable and no paid fallback configured.");
   if (!claimPaidQuestion(ctx)) throw new OutOfQuotaError("Daily paid-question cap reached.");
   restartFromQuestion(contents, "switched from free mid-question");
-  return tryPaid(contents);
+  return tryPaid(contents, ctx);
 }
 
 // Fix common Markdown habits that WhatsApp doesn't render.
@@ -173,12 +189,15 @@ export async function answerQuestion(question, { askedBy = "a classmate", recent
     .join("\n\n");
 
   const contents = [{ role: "user", parts: [{ text: userTurn }] }];
-  const ctx = { paid: false };
+  const ctx = { paid: false, freeMs: 0, final: false };
   const deadline = Date.now() + QUESTION_DEADLINE_MS;
 
   for (let step = 0; step < MAX_STEPS; step++) {
     if (Date.now() > deadline) throw new OutOfQuotaError("Question took too long.");
+    ctx.final = step === MAX_STEPS - 1;
+    const before = contents.length;
     const response = await generate(contents, ctx);
+    if (contents.length < before) step = 0; // restarted on paid: give it a fresh lookup budget
 
     const calls = response.functionCalls;
     if (!calls?.length) {
@@ -209,5 +228,5 @@ export async function answerQuestion(question, { askedBy = "a classmate", recent
     contents.push({ role: "user", parts });
   }
 
-  return "Sorry, that took too many lookups. Try asking a more specific question.";
+  return "Sorry, I couldn't pin that down on CourseWorks. Try asking a more specific question.";
 }
