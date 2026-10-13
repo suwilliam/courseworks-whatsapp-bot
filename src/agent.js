@@ -74,6 +74,11 @@ function request(client, model, contents, timeoutMs, { final = false } = {}) {
   });
 }
 
+// Overloaded (5xx), timed out or a network blip: often fine a moment later.
+// Quota (429) and request/auth errors (other 4xx) won't fix themselves, so don't retry those.
+const isTransient = (err) => !err.status || err.status >= 500;
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
 // Free models. Out of quota → next free model. Overloaded, timed out or erroring
 // → return null so the caller goes to paid: the other free models are usually busy too.
 let freePausedUntil = 0;
@@ -90,7 +95,15 @@ async function tryFree(contents, ctx) {
     }
     const started = Date.now();
     try {
-      return await request(free, model, contents, Math.min(FREE_TIMEOUT_MS, remaining), { final: ctx.final });
+      try {
+        return await request(free, model, contents, Math.min(FREE_TIMEOUT_MS, remaining), { final: ctx.final });
+      } catch (err) {
+        const left = FREE_BUDGET_MS - ctx.freeMs - (Date.now() - started);
+        if (!isTransient(err) || left < 5000) throw err;
+        console.warn(`${model}: ${err.status ?? err.name} — retrying once`);
+        await pause(1000);
+        return await request(free, model, contents, Math.min(FREE_TIMEOUT_MS, left - 1000), { final: ctx.final });
+      }
     } catch (err) {
       if (err.status === 429) {
         cooldownUntil.set(model, Date.now() + quotaResetMs(err));
@@ -131,8 +144,14 @@ async function tryPaid(contents, ctx) {
       try {
         response = await request(paid, model, contents, PAID_TIMEOUT_MS, { final: ctx.final });
       } catch (err) {
-        if (err.status !== 400 || !/thought signature/i.test(err.message) || contents.length === 1) throw err;
-        restartFromQuestion(contents, "history from another model");
+        if (err.status === 400 && /thought signature/i.test(err.message) && contents.length > 1) {
+          restartFromQuestion(contents, "history from another model");
+        } else if (isTransient(err)) {
+          console.warn(`paid ${model}: ${err.status ?? err.name} — retrying once`);
+          await pause(1500);
+        } else {
+          throw err;
+        }
         response = await request(paid, model, contents, PAID_TIMEOUT_MS, { final: ctx.final });
       }
       const u = response.usageMetadata || {};
