@@ -342,7 +342,8 @@ const toolList = [
   safeTool({
     name: "browse_course_files",
     description:
-      "Shows WHERE things live in a course: its menu tabs (e.g. Library Reserves, Ed Discussion) and its Files folder tree " +
+      "Shows WHERE things live in a course: its menu tabs (e.g. Library Reserves, Ed Discussion), links posted on the course " +
+      "home/syllabus page (cases and readings are often linked there), and its Files folder tree " +
       "with file counts (e.g. 'Readings/Class 6. Financing II'). Pass folder (a name fragment like 'Readings' or 'Class 6') to list " +
       "the files in matching folders. Use for 'where are the readings/slides/cases?' questions.",
     inputSchema: z.object({
@@ -350,13 +351,27 @@ const toolList = [
       folder: z.string().optional().describe("Folder name fragment to list files from, e.g. 'Readings' or 'Class 6'"),
     }),
     run: async ({ course_id, folder }) => {
-      const [tabs, folders] = await Promise.all([
+      const [tabs, folders, course] = await Promise.all([
         canvasGet(`/courses/${course_id}/tabs`).catch(() => []),
         canvasGet(`/courses/${course_id}/folders`).catch(() => []),
+        canvasGet(`/courses/${course_id}`, { include: ["syllabus_body"] }).catch(() => ({})),
       ]);
       const path = (f) => f.full_name.replace(/^course files\/?/, "") || "(top level)";
       const out = [`Course menu tabs: ${tabs.map((t) => t.label).join(", ") || "(unavailable)"}`];
-      if (!folders.length) return `${out[0]}\nFiles folders aren't visible to students in this course; materials may be in modules, pages or linked from the syllabus.`;
+
+      // Links on the syllabus page (the course home page when default_view is "syllabus").
+      const where = course.default_view === "syllabus" ? "course Home page (Syllabus)" : "Syllabus page";
+      const links = [...(course.syllabus_body || "").matchAll(/<a [^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)]
+        .map(([, href, text]) => [htmlToText(text, 150), href.replace(/&amp;/g, "&")])
+        .filter(([text, href]) => text && !href.startsWith("mailto:") && !/docs\.google|zoom\.us/.test(href));
+      if (links.length) {
+        out.push(`Links posted on the ${where}:`);
+        for (const [text, href] of links.slice(0, 20)) out.push(`• ${text} → ${href.startsWith("http") ? href : linkFor(href)}`);
+      }
+      if (!folders.length) {
+        out.push("Files folders aren't visible to students in this course; materials may be in modules or pages, or linked from the syllabus.");
+        return out.join("\n");
+      }
 
       const visible = folders.filter((f) => !/instructor files|_old|old_/i.test(f.full_name));
       if (!folder) {
