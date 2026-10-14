@@ -55,6 +55,12 @@ function labelDates(text) {
   });
 }
 
+// Folder id → path like "Readings/Class 6. Financing II" (Canvas prefixes "course files/").
+async function folderPaths(courseId) {
+  const folders = await canvasGet(`/courses/${courseId}/folders`).catch(() => []);
+  return Object.fromEntries(folders.map((f) => [f.id, f.full_name.replace(/^course files\/?/, "") || "(top level)"]));
+}
+
 const linkFor = (path) =>
   (path.startsWith("http") ? path : `${config.canvasBaseUrl}${path}`).replace(/\/submissions\/\d+$/, "");
 
@@ -319,11 +325,53 @@ const toolList = [
     description: "Search a course's Files by name (e.g. 'syllabus', 'case', 'reading'). Returns file IDs for read_file.",
     inputSchema: z.object({ course_id: courseId, search_term: z.string().min(2).optional() }),
     run: async ({ course_id, search_term }) => {
-      const files = await canvasGet(`/courses/${course_id}/files`, { search_term, sort: "updated_at", order: "desc" });
+      const [files, paths] = await Promise.all([
+        canvasGet(`/courses/${course_id}/files`, { search_term, sort: "updated_at", order: "desc" }),
+        folderPaths(course_id),
+      ]);
       return files
         .slice(0, 50)
-        .map((f) => `• ${f.display_name} [file_id: ${f.id}] ${f["content-type"]}, ${Math.round(f.size / 1024)} KB`)
+        .map(
+          (f) =>
+            `• ${f.display_name} [file_id: ${f.id}] in Files › ${paths[f.folder_id] ?? "?"} — ${f["content-type"]}, ${Math.round(f.size / 1024)} KB`,
+        )
         .join("\n");
+    },
+  }),
+
+  safeTool({
+    name: "browse_course_files",
+    description:
+      "Shows WHERE things live in a course: its menu tabs (e.g. Library Reserves, Ed Discussion) and its Files folder tree " +
+      "with file counts (e.g. 'Readings/Class 6. Financing II'). Pass folder (a name fragment like 'Readings' or 'Class 6') to list " +
+      "the files in matching folders. Use for 'where are the readings/slides/cases?' questions.",
+    inputSchema: z.object({
+      course_id: courseId,
+      folder: z.string().optional().describe("Folder name fragment to list files from, e.g. 'Readings' or 'Class 6'"),
+    }),
+    run: async ({ course_id, folder }) => {
+      const [tabs, folders] = await Promise.all([
+        canvasGet(`/courses/${course_id}/tabs`).catch(() => []),
+        canvasGet(`/courses/${course_id}/folders`).catch(() => []),
+      ]);
+      const path = (f) => f.full_name.replace(/^course files\/?/, "") || "(top level)";
+      const out = [`Course menu tabs: ${tabs.map((t) => t.label).join(", ") || "(unavailable)"}`];
+      if (!folders.length) return `${out[0]}\nFiles folders aren't visible to students in this course; materials may be in modules, pages or linked from the syllabus.`;
+
+      const visible = folders.filter((f) => !/instructor files|_old|old_/i.test(f.full_name));
+      if (!folder) {
+        out.push("Files folders (files count):");
+        for (const f of visible.sort((a, b) => path(a).localeCompare(path(b), undefined, { numeric: true }))) out.push(`• ${path(f)} (${f.files_count})`);
+        return out.join("\n");
+      }
+      const matches = visible.filter((f) => path(f).toLowerCase().includes(folder.toLowerCase()));
+      if (!matches.length) return `${out[0]}\nNo folder matching "${folder}". Call without folder to see the tree.`;
+      for (const f of matches.slice(0, 8)) {
+        const files = f.files_count ? await canvasGet(`/folders/${f.id}/files`).catch(() => []) : [];
+        out.push(`Files › ${path(f)}: ${files.length ? "" : "(empty)"}`);
+        for (const file of files.slice(0, 25)) out.push(`  • ${file.display_name} [file_id: ${file.id}] ${linkFor(`/courses/${course_id}/files/${file.id}`)}`);
+      }
+      return out.join("\n");
     },
   }),
 

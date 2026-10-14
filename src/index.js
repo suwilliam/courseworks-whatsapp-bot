@@ -15,7 +15,7 @@ import { rm } from "node:fs/promises";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 import { config } from "./config.js";
-import { answerQuestion, OutOfQuotaError } from "./agent.js";
+import { answerQuestion, OutOfQuotaError, warmUpPaid } from "./agent.js";
 
 const AUTH_DIR = ".baileys_auth";
 const REPLY_PREFIX = "🎓 ";
@@ -245,6 +245,7 @@ async function connect() {
 }
 
 connect();
+warmUpPaid(); // background: first paid answer after a restart shouldn't pay the setup cost
 
 for (const sig of ["SIGINT", "SIGTERM"]) {
   process.on(sig, () => {

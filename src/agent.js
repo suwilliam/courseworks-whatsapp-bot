@@ -14,7 +14,7 @@ const FREE_TIMEOUT_MS = 20_000; // per free request
 const FREE_BUDGET_MS = 25_000;
 const FINAL_NUDGE =
   "You've used all your lookups. Answer now from what you found; if the information isn't posted, say so and share the closest relevant thing you did find."; // total free-tier time per question before switching to paid
-const PAID_TIMEOUT_MS = 60_000;
+const PAID_TIMEOUT_MS = 25_000; // Vertex normally answers in 1–4s; a hang gets one retry
 const QUESTION_DEADLINE_MS = 3 * 60_000;
 
 const SYSTEM = `You are Exie, the friendly CourseWorks assistant in the Columbia MBAxMS cohort WhatsApp group chat (the name comes from "xMS"). Be warm and upbeat but brief. Only introduce yourself if someone greets you or asks who you are; otherwise skip greetings and go straight to the answer. You answer questions about classes — assignments, due dates, readings, syllabi, exams, announcements and schedules — using live data from CourseWorks (Canvas) via your tools.
@@ -25,7 +25,8 @@ How to answer:
 - For syllabus questions, try get_syllabus; if that is empty or only links to a PDF, find the PDF with search_files (or list_modules) and read it with read_file.
 - Homework and readings are sometimes only described inside lecture slides or PDFs. If an assignment's own description is thin or missing, or a question is about homework/readings/instructions, use search_course_files (with the course_id) and read_file_pages to check the slides. Slides rarely say "due": deadlines appear as "Read …", "Reading", "We will discuss … on 10/8", "Assignment", "Homework" or a schedule table. So search for the topic or title plus words like reading/read/assignment (e.g. "truth decay reading"), not "due date", and try a couple of phrasings before concluding something isn't there. Most questions need 3–6 lookups; if about 8 turn up nothing, stop and say it isn't posted yet (mentioning the most recent related item you did find, with its date).
 - For "what's due / what should I read for <day>" questions, "due" includes readings and class prep, not just Canvas assignments. Find each class meeting that day (list_calendar_events), then that session's readings: the event description (it often says "see syllabus"), the syllabus section for that session (search_course_files with the course_id for the session number/title, then read_file_pages), the latest slides, modules and announcements. List them per class.
-- Readings are usually in modules, pages or the syllabus. Exams may be assignments, calendar events, announcements or only in the syllabus — check more than one source before saying something isn't posted.
+- For "where is/are …?" questions (readings, slides, cases), give the exact place a student can click to, e.g. "Files › Readings › Class 5. Financing I", "linked in the syllabus on the course home page" or "Library Reserves tab", plus direct links. Use browse_course_files to see folders and menu tabs. Never answer just "it's on Canvas".
+- Readings are usually in modules, pages, Files folders or the syllabus. Exams may be assignments, calendar events, announcements or only in the syllabus — check more than one source before saying something isn't posted.
 - Dates from tools are already in Eastern Time. Slide dates come labeled like "10/8 [Thu Oct 8]": use that weekday, never guess one, and compare dates with today so you don't present past readings or deadlines as upcoming. Say the weekday and time, and flag anything due within 48 hours.
 - If CourseWorks genuinely doesn't have the answer, say so plainly and suggest who to ask (professor/TA) — never invent dates, policies or requirements.
 - Never share grades, submissions or anything personal about any student.
@@ -58,7 +59,7 @@ function claimPaidQuestion(ctx) {
 }
 
 function request(client, model, contents, timeoutMs, { final = false } = {}) {
-  return client.models.generateContent({
+  const call = client.models.generateContent({
     model,
     contents,
     config: {
@@ -73,6 +74,25 @@ function request(client, model, contents, timeoutMs, { final = false } = {}) {
       abortSignal: AbortSignal.timeout(timeoutMs),
     },
   });
+  // abortSignal only covers the HTTP request; client/credential setup can hang longer.
+  // A hard race guarantees the timeout (the error looks like the SDK's own abort).
+  let timer;
+  const hardLimit = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error(`timed out after ${timeoutMs}ms`), { name: "AbortError" })), timeoutMs + 1000);
+  });
+  return Promise.race([call, hardLimit]).finally(() => clearTimeout(timer));
+}
+
+/** Set up the Vertex client (credentials, connection) ahead of the first real question. */
+export async function warmUpPaid() {
+  if (!paid) return;
+  const t = Date.now();
+  try {
+    await paid.models.countTokens({ model: config.vertexModels[0], contents: "hi" });
+    console.log(`Vertex AI ready (${Date.now() - t}ms)`);
+  } catch (err) {
+    console.warn(`Vertex AI warm-up failed: ${err.status ?? err.name} ${String(err.message).slice(0, 120)}`);
+  }
 }
 
 // Overloaded (5xx), timed out or a network blip: often fine a moment later.
